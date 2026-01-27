@@ -382,14 +382,14 @@ def main():
     parser.add_argument(
         '--target-size',
         type=int,
-        default=512,
-        help='Target size for logo (default: 512)'
+        default=None,
+        help='Target size for logo (default: from pubspec or 512)'
     )
     parser.add_argument(
         '--padding',
         type=int,
-        default=20,
-        help='Padding around logo in pixels (default: 20)'
+        default=None,
+        help='Padding around logo in pixels (default: from pubspec or 20)'
     )
     parser.add_argument(
         '--brightness-light',
