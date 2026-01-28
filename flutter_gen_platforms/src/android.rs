@@ -1,11 +1,57 @@
 use anyhow::{Context, Result};
-use android_manifest::{AndroidManifest, StringResourceOrString, UsesPermission, VarOrBool};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use xmltree::{Element, EmitterConfig};
 
-use crate::config::{AndroidConfig, AndroidManifestConfig, AndroidUsesPermission};
+use crate::config::AndroidConfig;
+
+fn copy_manifest_templates(project_dir: &Path, android_dir: &Path, templates_dir: &Path) -> Result<()> {
+    let src_dir = project_dir.join(templates_dir);
+    if !src_dir.exists() {
+        anyhow::bail!(
+            "Android manifest templates directory not found: {}",
+            src_dir.display()
+        );
+    }
+
+    let main_src = src_dir.join("AndroidManifest.main.xml");
+    if !main_src.exists() {
+        anyhow::bail!(
+            "Missing required manifest template: {}",
+            main_src.display()
+        );
+    }
+
+    let mappings = [
+        (
+            src_dir.join("AndroidManifest.main.xml"),
+            android_dir.join("app/src/main/AndroidManifest.xml"),
+        ),
+        (
+            src_dir.join("AndroidManifest.debug.xml"),
+            android_dir.join("app/src/debug/AndroidManifest.xml"),
+        ),
+        (
+            src_dir.join("AndroidManifest.profile.xml"),
+            android_dir.join("app/src/profile/AndroidManifest.xml"),
+        ),
+    ];
+
+    for (src, dst) in mappings {
+        // debug/profile templates are optional; main is validated above.
+        if !src.exists() {
+            continue;
+        }
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create dir: {}", parent.display()))?;
+        }
+        fs::copy(&src, &dst)
+            .with_context(|| format!("Failed to copy {} -> {}", src.display(), dst.display()))?;
+    }
+
+    Ok(())
+}
 
 pub fn apply_repositories(path: &Path, repos: &[String]) -> Result<()> {
     let content = fs::read_to_string(path)
@@ -96,7 +142,10 @@ pub fn apply_app_gradle(
             in_kotlin_options = false;
             if let Some(false) = kotlin_incremental {
                 out.push(String::new());
-                out.push("    // 禁用 Kotlin 增量编译以避免跨盘符路径问题".to_string());
+                out.push(
+                    "    // Disable Kotlin incremental compilation to avoid cross-drive path issues"
+                        .to_string(),
+                );
                 out.push("    tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {".to_string());
                 out.push("        incremental = false".to_string());
                 out.push("    }".to_string());
@@ -145,143 +194,6 @@ pub fn apply_app_gradle(
     Ok(())
 }
 
-pub fn apply_manifest(path: &Path, cfg: &AndroidManifestConfig) -> Result<()> {
-    let mut manifest = if path.exists() {
-        let content = fs::read_to_string(path)
-            .with_context(|| format!("Failed to read file: {}", path.display()))?;
-        android_manifest::from_str(&content)
-            .with_context(|| format!("Failed to parse XML: {}", path.display()))?
-    } else {
-        AndroidManifest::default()
-    };
-
-    let mut existing_permissions = std::collections::BTreeSet::new();
-    for perm in &manifest.uses_permission {
-        if let Some(name) = perm.name.as_ref() {
-            existing_permissions.insert(name.to_string());
-        }
-    }
-
-    let permissions: Vec<AndroidUsesPermission> = cfg.permissions.clone().unwrap_or_default();
-
-    for perm_cfg in permissions {
-        if existing_permissions.contains(&perm_cfg.name) {
-            continue;
-        }
-        let mut permission = UsesPermission::default();
-        permission.name = Some(perm_cfg.name.clone());
-        permission.max_sdk_version = perm_cfg.max_sdk_version;
-        manifest.uses_permission.push(permission);
-    }
-
-    if let Some(label) = cfg.application_label.as_ref() {
-        if !label.trim().is_empty() {
-            manifest.application.label = Some(StringResourceOrString::string(label));
-        }
-    }
-
-    let uses_cleartext = cfg.uses_cleartext_traffic;
-    if let Some(value) = uses_cleartext {
-        manifest.application.uses_cleartext_traffic = Some(VarOrBool::bool(value));
-    }
-
-    let enable_on_back_invoked_callback = cfg.enable_on_back_invoked_callback.unwrap_or(false);
-
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create dir: {}", parent.display()))?;
-    }
-
-    let mut output = android_manifest::to_string_pretty(&manifest)
-        .with_context(|| format!("Failed to write XML: {}", path.display()))?;
-    output = finalize_manifest_xml(&output, enable_on_back_invoked_callback)?;
-    fs::write(path, output)
-        .with_context(|| format!("Failed to write file: {}", path.display()))?;
-    Ok(())
-}
-
-fn finalize_manifest_xml(xml: &str, enable_on_back_invoked_callback: bool) -> Result<String> {
-    let mut root = Element::parse(xml.as_bytes())
-        .context("Failed to parse AndroidManifest.xml")?;
-    if enable_on_back_invoked_callback {
-        let mut application = None;
-        for child in root.children.iter_mut() {
-            if let xmltree::XMLNode::Element(element) = child {
-                if element.name == "application" {
-                    application = Some(element);
-                    break;
-                }
-            }
-        }
-
-        if let Some(app) = application {
-            app.attributes
-                .entry("android:enableOnBackInvokedCallback".to_string())
-                .or_insert_with(|| "true".to_string());
-        } else {
-            let mut app = Element::new("application");
-            app.attributes.insert(
-                "android:enableOnBackInvokedCallback".to_string(),
-                "true".to_string(),
-            );
-            root.children.push(xmltree::XMLNode::Element(app));
-        }
-    }
-
-    normalize_android_attributes(&mut root);
-
-    let mut out = Vec::new();
-    let config = EmitterConfig::new()
-        .perform_indent(true)
-        .write_document_declaration(true);
-    root.write_with_config(&mut out, config)
-        .context("Failed to write AndroidManifest.xml")?;
-
-    Ok(String::from_utf8(out).context("Failed to encode AndroidManifest.xml")?)
-}
-
-fn normalize_android_attributes(element: &mut Element) {
-    let android_keys = [
-        "name",
-        "label",
-        "value",
-        "resource",
-        "icon",
-        "theme",
-        "exported",
-        "launchMode",
-        "taskAffinity",
-        "configChanges",
-        "hardwareAccelerated",
-        "windowSoftInputMode",
-        "mimeType",
-        "maxSdkVersion",
-        "usesCleartextTraffic",
-        "enableOnBackInvokedCallback",
-    ];
-
-    let mut to_add = Vec::new();
-    let mut to_remove = Vec::new();
-    for (key, value) in element.attributes.iter() {
-        if !key.contains(':') && android_keys.contains(&key.as_str()) {
-            to_remove.push(key.clone());
-            to_add.push((format!("android:{key}"), value.clone()));
-        }
-    }
-    for key in to_remove {
-        element.attributes.remove(&key);
-    }
-    for (key, value) in to_add {
-        element.attributes.insert(key, value);
-    }
-
-    for child in &mut element.children {
-        if let xmltree::XMLNode::Element(child) = child {
-            normalize_android_attributes(child);
-        }
-    }
-}
-
 pub fn apply_gradle_wrapper_properties(path: &Path, distribution_url: &str) -> Result<()> {
     let mut props = read_properties(path)?;
     props.insert("distributionUrl".to_string(), distribution_url.to_string());
@@ -311,8 +223,16 @@ fn write_properties(path: &Path, props: &HashMap<String, String>) -> Result<()> 
 pub fn process_android_platform(
     project_dir: &Path,
     config: &AndroidConfig,
+    platforms_dir: Option<&str>,
 ) -> Result<()> {
     let android_dir = project_dir.join("android");
+
+    let platforms_root = platforms_dir
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+        .unwrap_or("platforms");
+    let templates_dir = std::path::PathBuf::from(platforms_root).join("android");
+    copy_manifest_templates(project_dir, &android_dir, &templates_dir)?;
 
     apply_repositories(
         &android_dir.join("build.gradle.kts"),
@@ -330,16 +250,7 @@ pub fn process_android_platform(
         config.app.build.abi_filters.as_deref(),
         config.app.build.kotlin_incremental,
     )?;
-    apply_manifest(
-        &android_dir.join("app/src/main/AndroidManifest.xml"),
-        &config.app.manifest.main,
-    )?;
-    if let Some(debug) = config.app.manifest.debug.as_ref() {
-        apply_manifest(&android_dir.join("app/src/debug/AndroidManifest.xml"), debug)?;
-    }
-    if let Some(profile) = config.app.manifest.profile.as_ref() {
-        apply_manifest(&android_dir.join("app/src/profile/AndroidManifest.xml"), profile)?;
-    }
+    // Manifests are fully driven by template files under platforms/android.
     if let Some(distribution_url) = &config.gradle_wrapper.distribution_url {
         apply_gradle_wrapper_properties(
             &android_dir.join("gradle/wrapper/gradle-wrapper.properties"),

@@ -21,7 +21,7 @@ pub struct Config {
     #[serde(default)]
     pub pubspec: Option<PubspecConfig>,
     #[serde(default)]
-    pub tools: ToolsConfig,
+    pub platforms_dir: Option<String>,
     #[serde(default)]
     pub create: FlutterCreateConfig,
     pub android: AndroidConfig,
@@ -41,12 +41,6 @@ pub struct PubspecConfig {
     pub homepage: Option<String>,
     #[serde(default)]
     pub repository: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-pub struct ToolsConfig {
-    #[serde(default)]
-    pub gen_logo_script: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -87,8 +81,6 @@ pub struct AndroidGradleWrapperConfig {
 pub struct AndroidAppConfig {
     #[serde(default)]
     pub build: AndroidAppBuildConfig,
-    #[serde(default)]
-    pub manifest: AndroidAppManifestConfig,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -103,38 +95,6 @@ pub struct AndroidAppBuildConfig {
     pub abi_filters: Option<Vec<String>>,
     #[serde(default)]
     pub kotlin_incremental: Option<bool>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-pub struct AndroidManifestConfig {
-    #[serde(default)]
-    pub application_label: Option<String>,
-    #[serde(default)]
-    pub uses_cleartext_traffic: Option<bool>,
-    #[serde(default)]
-    pub enable_on_back_invoked_callback: Option<bool>,
-    #[serde(default)]
-    pub permissions: Option<Vec<AndroidUsesPermission>>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-#[allow(dead_code)]
-pub struct AndroidUsesPermission {
-    pub name: String,
-    #[serde(default)]
-    pub max_sdk_version: Option<u32>,
-    #[serde(default)]
-    pub uses_permission_flags: Option<String>,
-    #[serde(default)]
-    pub target_api: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-pub struct AndroidAppManifestConfig {
-    #[serde(default)]
-    pub main: AndroidManifestConfig,
-    pub debug: Option<AndroidManifestConfig>,
-    pub profile: Option<AndroidManifestConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -207,6 +167,9 @@ pub fn expand_config(cfg: &mut Config) -> Result<()> {
     if let Some(value) = cfg.description.as_ref() {
         cfg.description = Some(expand_env_vars(value)?);
     }
+    if let Some(value) = cfg.platforms_dir.as_ref() {
+        cfg.platforms_dir = Some(expand_env_vars(value)?);
+    }
     expand_flutter_create_config(&mut cfg.create)?;
     expand_android_config(&mut cfg.android)?;
     if cfg.android.app.build.application_id.trim().is_empty() {
@@ -217,9 +180,6 @@ pub fn expand_config(cfg: &mut Config) -> Result<()> {
             bail!("android.app.build.application_id is required when org is not set");
         }
     }
-    if cfg.android.app.manifest.main.application_label.is_none() {
-        cfg.android.app.manifest.main.application_label = Some(cfg.project_name.clone());
-    }
     if cfg.android.app.build.namespace.trim().is_empty() {
         cfg.android.app.build.namespace = cfg.android.app.build.application_id.clone();
     }
@@ -229,18 +189,9 @@ pub fn expand_config(cfg: &mut Config) -> Result<()> {
 fn expand_android_config(cfg: &mut AndroidConfig) -> Result<()> {
     cfg.app.build.namespace = expand_env_vars(&cfg.app.build.namespace)?;
     cfg.app.build.application_id = expand_env_vars(&cfg.app.build.application_id)?;
-
-    if let Some(value) = cfg.app.manifest.main.application_label.as_ref() {
-        cfg.app.manifest.main.application_label = Some(expand_env_vars(value)?);
-    }
-    expand_manifest_override(cfg.app.manifest.debug.as_mut())?;
-    expand_manifest_override(cfg.app.manifest.profile.as_mut())?;
     if let Some(value) = cfg.gradle_wrapper.distribution_url.as_ref() {
         cfg.gradle_wrapper.distribution_url = Some(expand_env_vars(value)?);
     }
-    expand_manifest_override(Some(&mut cfg.app.manifest.main))?;
-    expand_manifest_override(cfg.app.manifest.debug.as_mut())?;
-    expand_manifest_override(cfg.app.manifest.profile.as_mut())?;
     cfg.build.allprojects.repositories = cfg
         .build
         .allprojects
@@ -269,21 +220,6 @@ fn expand_flutter_create_config(cfg: &mut FlutterCreateConfig) -> Result<()> {
                 .map(|value| expand_env_vars(value))
                 .collect::<Result<Vec<_>>>()?,
         );
-    }
-    Ok(())
-}
-
-fn expand_manifest_override(override_cfg: Option<&mut AndroidManifestConfig>) -> Result<()> {
-    let Some(cfg) = override_cfg else {
-        return Ok(());
-    };
-    if let Some(value) = cfg.application_label.as_ref() {
-        cfg.application_label = Some(expand_env_vars(value)?);
-    }
-    if let Some(perms) = cfg.permissions.as_mut() {
-        for perm in perms.iter_mut() {
-            perm.name = expand_env_vars(&perm.name)?;
-        }
     }
     Ok(())
 }

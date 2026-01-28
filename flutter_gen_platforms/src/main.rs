@@ -155,7 +155,7 @@ fn main() -> Result<()> {
                 android_dir.display()
             );
         }
-        android::process_android_platform(&project_dir, &cfg.android)?;
+        android::process_android_platform(&project_dir, &cfg.android, cfg.platforms_dir.as_deref())?;
     }
 
     // Process Web platform
