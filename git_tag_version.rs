@@ -152,7 +152,9 @@ fn main() -> Result<()> {
         if args.force {
             println!("[tag-version] Tag '{}' already exists. Force deleting...", tag_plain);
             let tag_ref = format!("refs/tags/{}", tag_plain);
-            repo.refs.delete_reference(tag_ref)?;
+            if let Some(reference) = repo.try_find_reference(&tag_ref)? {
+                reference.delete()?;
+            }
         } else {
             println!("[tag-version] Tag '{}' already exists.", tag_plain);
             if preferred_tag == tag_v && !tag_exists(&repo, &tag_v)? {
@@ -166,7 +168,9 @@ fn main() -> Result<()> {
         if args.force {
             println!("[tag-version] Tag '{}' already exists. Force deleting...", tag_v);
             let tag_ref = format!("refs/tags/{}", tag_v);
-            repo.refs.delete_reference(tag_ref)?;
+            if let Some(reference) = repo.try_find_reference(&tag_ref)? {
+                reference.delete()?;
+            }
         } else {
             println!("[tag-version] Tag '{}' already exists.", tag_v);
              if preferred_tag == tag_plain {
