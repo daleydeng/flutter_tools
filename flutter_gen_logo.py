@@ -471,6 +471,7 @@ def main():
     # Get target size and padding from config or args
     target_size = args.target_size or logo_config.get('target_size', 512)
     padding = args.padding if args.padding is not None else logo_config.get('padding', 20)
+    output_pattern = logo_config.get('output_pattern', '{name}_{theme}.png')
 
     logger.info(f"Reading logo from: {input_path}")
     logger.info(f"Output directory: {output_dir}")
@@ -532,11 +533,11 @@ def main():
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Generate output file names based on input file name
+    # Generate output file names based on pattern
     input_stem = input_path.stem  # Get filename without extension
-    transparent_output = output_dir / f'{input_stem}.png'
-    light_output = output_dir / f'{input_stem}_light.png'
-    dark_output = output_dir / f'{input_stem}_dark.png'
+    transparent_output = output_dir / output_pattern.format(name=input_stem, theme='neutral')
+    light_output = output_dir / output_pattern.format(name=input_stem, theme='light')
+    dark_output = output_dir / output_pattern.format(name=input_stem, theme='dark')
 
     try:
         # Save transparent version (neutral base)
